@@ -4,8 +4,8 @@ import google.generativeai as genai
 import os
 import json
 
-# Set your API key
-os.environ["GOOGLE_API_KEY"] = ""
+# Set your API key securely via environment variables (you can also use dotenv to load them from a .env file)
+os.environ["GOOGLE_API_KEY"] = "AIzaSyB_4wPmxxoU-RC7VDe8skmkjqrioEtYhXM"
 genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 
 # app creation
@@ -15,9 +15,11 @@ app = Flask(__name__)
 model = genai.GenerativeModel("models/gemini-1.5-pro")
 
 
+import json
+
+import json
 
 def resumes_details(resume):
-    # Prompt with detailed request
     prompt = f"""
     You are a resume parsing assistant. Given the following resume text, extract all the important details and return them in a well-structured JSON format.
 
@@ -39,11 +41,33 @@ def resumes_details(resume):
 
     Return the response in JSON format.
     """
-
-    # Generate response from the model
     response = model.generate_content(prompt).text
-    return response
+    print("Generated Content:", response)  # Print the raw model response
 
+    # Check if the response is empty or invalid
+    if not response:
+        print("Empty response received.")
+        return None
+
+    # Clean the response (remove the code block markers like '```json')
+    response_clean = response.strip()
+
+    # Remove the '```json' and any trailing backticks if they exist
+    response_clean = response_clean.replace("```json", "").replace("```", "")
+
+    print("Cleaned Response:", repr(response_clean))
+
+    # Try parsing the response as JSON
+    try:
+        parsed_data = json.loads(response_clean)  # Attempt to parse as JSON
+        print("Parsed JSON:", parsed_data)
+        return parsed_data
+    except json.JSONDecodeError as e:
+        # Print more details to understand what went wrong
+        print(f"JSON Decode Error: {e}")
+        print("The response is not valid JSON. Here's the response that caused the error:")
+        print(repr(response_clean))  # Print the problematic response
+        return None
 
 @app.route('/')
 def index():
@@ -53,12 +77,12 @@ def index():
 @app.route('/upload_resume', methods=['POST'])
 def upload_resume():
     if 'resume' not in request.files:
-        return jsonify({"error": "No file part"})
+        return jsonify({"error": "No file part"}), 400
 
     file = request.files['resume']
 
     if file.filename == '':
-        return jsonify({"error": "No selected file"})
+        return jsonify({"error": "No selected file"}), 400
 
     if file and file.filename.endswith('.pdf'):
         # Extract text from the PDF
@@ -69,68 +93,72 @@ def upload_resume():
 
         # Get resume details from the model
         response = resumes_details(text)
+        print("Parsed Response:", response)
 
+        if not response:
+            return jsonify({"error": "Failed to process the resume."}), 500
 
-        print(response)
-        # Clean the response by removing the ```json and surrounding text
-        response_clean = response.replace("```json", "").replace("```", "").strip()
+        # Extract details from response
+        full_name = response.get("full_name", "N/A")
+        contact_number = response.get("contact_number", "N/A")
+        email_address = response.get("email_address", "N/A")
+        location = response.get("location", "N/A")
 
-        # Load the cleaned response into a dictionary
-        data = json.loads(response_clean)
+        # Extract skills
+        skills = response.get("skills", {})
+        technical_skills = skills.get("programming", []) + skills.get("web_development", []) + skills.get("technology", [])
+        non_technical_skills = []  # Assuming 'non_technical_skills' isn't directly provided in the JSON
 
-        # Extract details from the JSON response
-        full_name = data.get("Full Name", "")
-        contact_number = data.get("Contact Number", "")
-        email_address = data.get("Email Address", "")
-        location = data.get("Location", "")
-
-        # Skills extraction
-        skills = data.get("Skills", {})
-        technical_skills = skills.get("Technical Skills", [])
-        non_technical_skills = skills.get("Non-Technical Skills", [])
+        # Convert skills list to string
         technical_skills_str = ", ".join(technical_skills)
         non_technical_skills_str = ", ".join(non_technical_skills)
 
-        # Education extraction
-        education_list = data.get("Education", [])
+        # Handle Education
+        education = response.get("education", [])
         education_str = "\n".join([
-            f"{edu.get('Degree', 'N/A')} from {edu.get('Institution', 'N/A')} (Graduated: {edu.get('Years', 'N/A')})"
-            for edu in education_list
+            f"{edu.get('degree', 'N/A')} at {edu.get('institution', 'N/A')} ({edu.get('dates', 'N/A')}, GPA: {edu.get('gpa', 'N/A')})"
+            for edu in education
         ])
 
-        # Work Experience extraction
-        work_experience_list = data.get("Work Experience", [])
+        # Handle Work Experience
+        work_experience = response.get("work_experience", [])
         work_experience_str = "\n".join([
-            f"{job.get('Job Title', 'N/A')} at {job.get('Company Name', 'N/A')} ({job.get('Years of Experience', 'N/A')})\nResponsibilities: {', '.join(job.get('Responsibilities', []))}"
-            for job in work_experience_list
+            f"{exp.get('role', 'N/A')} at {exp.get('company', 'N/A')} ({exp.get('dates', 'N/A')})\n"
+            + "\n".join([f"- {resp}" for resp in exp.get("responsibilities", [])])
+            for exp in work_experience
         ])
 
-        # Certifications extraction
-        certifications_str = ", ".join(data.get("Certifications", []))
+        # Handle Certifications
+        certifications = response.get("certifications", [])
+        certifications_str = ", ".join(certifications) if certifications else "N/A"
 
-        # Languages extraction
-        languages_str = ", ".join(data.get("Languages spoken", []))
+        # Handle Languages
+        languages = response.get("languages", [])
+        languages_str = ", ".join(languages) if languages else "N/A"
 
-        # Suggested Category and Recommended Job Roles extraction
-        suggested_resume_category = data.get("Suggested Resume Category", "")
-        recommended_job_roles_str = ", ".join(data.get("Recommended Job Roles", []))
+        # Suggested categories and job roles (if available)
+        suggested_resume_category = response.get("suggested_resume_category", "N/A")
+        recommended_job_roles = response.get("recommended_job_roles", [])
+        recommended_job_roles_str = ", ".join(recommended_job_roles)
 
-        # Render the template and pass the extracted values to HTML
-        return render_template('index.html',
-                               full_name=full_name,
-                               contact_number=contact_number,
-                               email_address=email_address,
-                               location=location,
-                               technical_skills=technical_skills_str,
-                               non_technical_skills=non_technical_skills_str,
-                               education=education_str,
-                               work_experience=work_experience_str,
-                               certifications=certifications_str,
-                               languages=languages_str,
-                               suggested_resume_category=suggested_resume_category,
-                               recommended_job_roles=recommended_job_roles_str)
-
-
+        # Render the response to the template
+        return render_template(
+            'index.html',
+            full_name=full_name,
+            contact_number=contact_number,
+            email_address=email_address,
+            location=location,
+            technical_skills=technical_skills_str,
+            non_technical_skills=non_technical_skills_str,
+            education=education_str,
+            work_experience=work_experience_str,
+            certifications=certifications_str,
+            languages=languages_str,
+            suggested_resume_category=suggested_resume_category,
+            recommended_job_roles=recommended_job_roles_str
+        )
+    else:
+        return jsonify({"error": "Unsupported file format. Please upload a PDF."}), 400
 
 # Start the Flask app
 if __name__ == "__main__":
